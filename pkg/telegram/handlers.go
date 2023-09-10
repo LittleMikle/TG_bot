@@ -1,14 +1,17 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
-	"log"
+	"github.com/zhashkevych/go-pocket-sdk"
+	"net/url"
 )
 
 const (
 	commandStart       = "start"
 	replyStartTemplate = "Привет! Для сохранения ссылок в своем Pocket необходимо авторизоваться. Для этого переходи по ссылке:\n%s"
+	replyAlreadyAuth   = "Ты уже авторизирован, присылай ссылку, я сохраню!"
 )
 
 func (b *Bot) handleCommand(message *tgbotapi.Message) error {
@@ -21,14 +24,7 @@ func (b *Bot) handleCommand(message *tgbotapi.Message) error {
 	}
 }
 
-func (b *Bot) handleMessage(message *tgbotapi.Message) {
-	log.Printf("[%s] %s", message.From.UserName, message.Text)
-
-	msg := tgbotapi.NewMessage(message.Chat.ID, message.Text)
-	b.bot.Send(msg)
-}
-
-func (b *Bot) handleStartCommand(message *tgbotapi.Message) error {
+func (b *Bot) initAuthProcess(message *tgbotapi.Message) error {
 	authLink, err := b.generateAuthorizationLink(message.Chat.ID)
 	if err != nil {
 		return err
@@ -37,6 +33,51 @@ func (b *Bot) handleStartCommand(message *tgbotapi.Message) error {
 	msg := tgbotapi.NewMessage(message.Chat.ID, fmt.Sprintf(replyStartTemplate, authLink))
 	_, err = b.bot.Send(msg)
 
+	return err
+}
+
+func (b *Bot) handleMessage(message *tgbotapi.Message) error {
+	msg := tgbotapi.NewMessage(message.Chat.ID, "Ссылка успешно сохранена!")
+
+	_, err := url.ParseRequestURI(message.Text)
+	if err != nil {
+		msg.Text = "Плохая ссылка!"
+		_, err = b.bot.Send(msg)
+		return err
+	}
+
+	accessToken, err := b.getAccessToken(message.Chat.ID)
+	if err != nil {
+		msg.Text = "Ты не авторизирован! Используй комманду /start"
+		_, err = b.bot.Send(msg)
+		return err
+	}
+
+	err = b.pocketClient.Add(context.Background(), pocket.AddInput{
+		AccessToken: accessToken,
+		URL:         message.Text,
+	})
+	if err != nil {
+		msg.Text = "Не удалось сохранить ссылку..."
+		_, err = b.bot.Send(msg)
+		return err
+	}
+
+	_, err = b.bot.Send(msg)
+	return err
+}
+
+func (b *Bot) handleStartCommand(message *tgbotapi.Message) error {
+	_, err := b.getAccessToken(message.Chat.ID)
+	if err != nil {
+		return b.initAuthProcess(message)
+	}
+
+	msg := tgbotapi.NewMessage(message.Chat.ID, replyAlreadyAuth)
+	_, err = b.bot.Send(msg)
+	if err != nil {
+		return err
+	}
 	return err
 }
 
